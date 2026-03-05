@@ -39,12 +39,8 @@ import (
 )
 
 const (
-	testSiteID   = "00000000-0000-0000-0000-000000000001"
-	testTenantID = "00000000-0000-0000-0000-000000000001"
 	testOrgName  = "test-org"
-
-	instanceReadyTimeout = 10 * time.Minute
-	pollInterval         = 10 * time.Second
+	pollInterval = 10 * time.Second
 )
 
 func TestE2ELive(t *testing.T) {
@@ -83,54 +79,76 @@ var _ = Describe("Live Cloud Provider E2E", Label("live"), func() {
 		token = getKeycloakToken()
 	})
 
-	Context("Cloud provider initialization with live API", func() {
-		It("should initialize the cloud provider with a valid config", func() {
-			By("Creating a cloud config")
-			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, testSiteID, testTenantID)
+	Context("Cloud provider with real infrastructure", func() {
+		var (
+			siteID     string
+			vpcID      string
+			subnetID   string
+			instanceID string
+		)
 
-			By("Initializing the cloud provider")
+		BeforeEach(func() {
+			prefix := fmt.Sprintf("e2e-ccm-%d", time.Now().Unix())
+			siteID, vpcID, subnetID, instanceID = setupInfrastructureViaAPI(token, testOrgName, prefix)
+		})
+
+		AfterEach(func() {
+			cleanupInfrastructureViaAPI(token, testOrgName, instanceID, subnetID, vpcID, siteID)
+		})
+
+		It("should initialize the cloud provider with a valid config", func() {
+			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, siteID, siteID)
+
 			provider, err := cloudprovider.NewNvidiaCarbideCloud(strings.NewReader(cloudConfig))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(provider).NotTo(BeNil())
-
-			By("Verifying provider name")
 			Expect(provider.ProviderName()).To(Equal("nvidia-carbide"))
 
-			By("Verifying InstancesV2 is supported")
 			instancesV2, supported := provider.InstancesV2()
 			Expect(supported).To(BeTrue())
 			Expect(instancesV2).NotTo(BeNil())
 
-			By("Verifying Zones is supported")
 			zones, supported := provider.Zones()
 			Expect(supported).To(BeTrue())
 			Expect(zones).NotTo(BeNil())
 		})
-	})
 
-	Context("Node lifecycle with live API", func() {
-		It("should check instance existence for a node with provider ID", func() {
-			By("Creating a cloud config")
-			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, testSiteID, testTenantID)
+		It("should return true for InstanceExists with a real instance", func() {
+			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, siteID, siteID)
 
-			By("Initializing the cloud provider")
 			provider, err := cloudprovider.NewNvidiaCarbideCloud(strings.NewReader(cloudConfig))
 			Expect(err).NotTo(HaveOccurred())
 
-			instancesV2, supported := provider.InstancesV2()
-			Expect(supported).To(BeTrue())
+			instancesV2, _ := provider.InstancesV2()
 
-			By("Checking instance existence for a non-existent instance")
-			fakeInstanceID := uuid.New().String()
-			providerID := fmt.Sprintf("nvidia-carbide://%s/%s/%s/%s", testOrgName, testTenantID, testSiteID, fakeInstanceID)
+			providerID := fmt.Sprintf("nvidia-carbide://%s/%s/%s/%s",
+				testOrgName, siteID, siteID, instanceID)
 
 			node := &corev1.Node{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-node",
-				},
-				Spec: corev1.NodeSpec{
-					ProviderID: providerID,
-				},
+				ObjectMeta: metav1.ObjectMeta{Name: "test-node-exists"},
+				Spec:       corev1.NodeSpec{ProviderID: providerID},
+			}
+
+			exists, err := instancesV2.InstanceExists(ctx, node)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(exists).To(BeTrue(), "Real instance should be found")
+		})
+
+		It("should return false for InstanceExists with a non-existent instance", func() {
+			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, siteID, siteID)
+
+			provider, err := cloudprovider.NewNvidiaCarbideCloud(strings.NewReader(cloudConfig))
+			Expect(err).NotTo(HaveOccurred())
+
+			instancesV2, _ := provider.InstancesV2()
+
+			fakeInstanceID := uuid.New().String()
+			providerID := fmt.Sprintf("nvidia-carbide://%s/%s/%s/%s",
+				testOrgName, siteID, siteID, fakeInstanceID)
+
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-node-not-exists"},
+				Spec:       corev1.NodeSpec{ProviderID: providerID},
 			}
 
 			exists, err := instancesV2.InstanceExists(ctx, node)
@@ -138,25 +156,43 @@ var _ = Describe("Live Cloud Provider E2E", Label("live"), func() {
 			Expect(exists).To(BeFalse(), "Non-existent instance should not be found")
 		})
 
-		It("should create a node and verify the CCM can query it", func() {
-			By("Creating a test node in the Kind cluster")
-			nodeName := fmt.Sprintf("e2e-live-node-%d", time.Now().Unix())
-			fakeInstanceID := uuid.New().String()
-			providerID := fmt.Sprintf("nvidia-carbide://%s/%s/%s/%s", testOrgName, testTenantID, testSiteID, fakeInstanceID)
+		It("should return instance metadata for a real instance", func() {
+			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, siteID, siteID)
+
+			provider, err := cloudprovider.NewNvidiaCarbideCloud(strings.NewReader(cloudConfig))
+			Expect(err).NotTo(HaveOccurred())
+
+			instancesV2, _ := provider.InstancesV2()
+
+			providerID := fmt.Sprintf("nvidia-carbide://%s/%s/%s/%s",
+				testOrgName, siteID, siteID, instanceID)
 
 			node := &corev1.Node{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: nodeName,
-				},
-				Spec: corev1.NodeSpec{
-					ProviderID: providerID,
-				},
+				ObjectMeta: metav1.ObjectMeta{Name: "test-node-metadata"},
+				Spec:       corev1.NodeSpec{ProviderID: providerID},
+			}
+
+			metadata, err := instancesV2.InstanceMetadata(ctx, node)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(metadata).NotTo(BeNil())
+			Expect(metadata.ProviderID).To(Equal(providerID))
+			Expect(metadata.Zone).NotTo(BeEmpty())
+			Expect(metadata.Region).NotTo(BeEmpty())
+		})
+
+		It("should create a node and verify the CCM can query it", func() {
+			nodeName := fmt.Sprintf("e2e-live-node-%d", time.Now().Unix())
+			providerID := fmt.Sprintf("nvidia-carbide://%s/%s/%s/%s",
+				testOrgName, siteID, siteID, instanceID)
+
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: nodeName},
+				Spec:       corev1.NodeSpec{ProviderID: providerID},
 			}
 
 			_, err := clientset.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{})
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleaning up the test node")
 			err = clientset.CoreV1().Nodes().Delete(ctx, nodeName, metav1.DeleteOptions{})
 			Expect(err).NotTo(HaveOccurred())
 		})

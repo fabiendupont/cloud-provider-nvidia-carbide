@@ -19,6 +19,7 @@ limitations under the License.
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -81,4 +82,105 @@ token: %q
 siteId: %q
 tenantId: %q
 `, endpoint, orgName, token, siteID, tenantID)
+}
+
+// carbideAPIRequest makes an authenticated request to the Carbide REST API.
+func carbideAPIRequest(method, path, token string, body interface{}) (map[string]interface{}, int) {
+	endpoint := os.Getenv("NVIDIA_CARBIDE_API_ENDPOINT")
+	Expect(endpoint).NotTo(BeEmpty())
+
+	var reqBody io.Reader
+	if body != nil {
+		jsonBytes, err := json.Marshal(body)
+		Expect(err).NotTo(HaveOccurred())
+		reqBody = bytes.NewReader(jsonBytes)
+	}
+
+	req, err := http.NewRequest(method, endpoint+path, reqBody)
+	Expect(err).NotTo(HaveOccurred())
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	Expect(err).NotTo(HaveOccurred())
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	Expect(err).NotTo(HaveOccurred())
+
+	var result map[string]interface{}
+	if len(respBody) > 0 {
+		_ = json.Unmarshal(respBody, &result)
+	}
+
+	_, _ = fmt.Fprintf(GinkgoWriter, "%s %s -> %d\n", method, path, resp.StatusCode)
+	return result, resp.StatusCode
+}
+
+// setupInfrastructureViaAPI creates site, VPC, IP block, subnet, and an instance.
+// Returns siteID, vpcID, subnetID, instanceID for use in tests.
+func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, vpcID, subnetID, instanceID string) {
+	apiBase := fmt.Sprintf("/v2/org/%s/carbide", orgName)
+
+	// Create site
+	siteResult, status := carbideAPIRequest("POST", apiBase+"/site", token, map[string]interface{}{
+		"name": prefix + "-site", "displayName": prefix + " Site",
+	})
+	Expect(status).To(Equal(http.StatusCreated), "Failed to create site: %v", siteResult)
+	siteID = siteResult["id"].(string)
+
+	// Create VPC
+	vpcResult, status := carbideAPIRequest("POST", apiBase+"/vpc", token, map[string]interface{}{
+		"name": prefix + "-vpc", "siteId": siteID,
+	})
+	Expect(status).To(Equal(http.StatusCreated), "Failed to create VPC: %v", vpcResult)
+	vpcID = vpcResult["id"].(string)
+
+	// Create IP block
+	ipBlockResult, status := carbideAPIRequest("POST", apiBase+"/ipblock", token, map[string]interface{}{
+		"name": prefix + "-ipblock", "siteId": siteID,
+		"prefix": "10.0.0.0", "prefixLength": 16, "protocolVersion": "ipv4", "routingType": "datacenter_only",
+	})
+	Expect(status).To(Equal(http.StatusCreated), "Failed to create IP block: %v", ipBlockResult)
+	ipBlockID := ipBlockResult["id"].(string)
+
+	// Create subnet
+	subnetResult, status := carbideAPIRequest("POST", apiBase+"/subnet", token, map[string]interface{}{
+		"name": prefix + "-subnet", "vpcId": vpcID, "ipv4BlockId": ipBlockID, "prefixLength": 24,
+	})
+	Expect(status).To(Equal(http.StatusCreated), "Failed to create subnet: %v", subnetResult)
+	subnetID = subnetResult["id"].(string)
+
+	// Create instance
+	instanceResult, status := carbideAPIRequest("POST", apiBase+"/instance", token, map[string]interface{}{
+		"name": prefix + "-instance", "tenantId": siteID, "vpcId": vpcID,
+		"interfaces": []map[string]interface{}{
+			{"subnetId": subnetID, "isPhysical": false},
+		},
+	})
+	Expect(status).To(Or(Equal(http.StatusOK), Equal(http.StatusCreated)),
+		"Failed to create instance: %v", instanceResult)
+	instanceID = instanceResult["id"].(string)
+
+	_, _ = fmt.Fprintf(GinkgoWriter, "Infrastructure: site=%s vpc=%s subnet=%s instance=%s\n",
+		siteID, vpcID, subnetID, instanceID)
+	return
+}
+
+// cleanupInfrastructureViaAPI cleans up infrastructure created by setupInfrastructureViaAPI.
+func cleanupInfrastructureViaAPI(token, orgName, instanceID, subnetID, vpcID, siteID string) {
+	apiBase := fmt.Sprintf("/v2/org/%s/carbide", orgName)
+	if instanceID != "" {
+		carbideAPIRequest("DELETE", apiBase+"/instance/"+instanceID, token, nil)
+	}
+	if subnetID != "" {
+		carbideAPIRequest("DELETE", apiBase+"/subnet/"+subnetID, token, nil)
+	}
+	if vpcID != "" {
+		carbideAPIRequest("DELETE", apiBase+"/vpc/"+vpcID, token, nil)
+	}
+	if siteID != "" {
+		carbideAPIRequest("DELETE", apiBase+"/site/"+siteID, token, nil)
+	}
 }
