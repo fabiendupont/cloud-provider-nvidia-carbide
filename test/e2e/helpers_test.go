@@ -181,6 +181,7 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, vpcID, su
 	ipBlockID := ipBlockResult["id"].(string)
 
 	// Create Allocation (links Tenant to Site with IP Block access)
+	// The allocation creates a child IP block owned by the tenant — subnets must use that child ID.
 	allocResult, status := carbideAPIRequest("POST", apiBase+"/allocation", token, map[string]interface{}{
 		"name":     prefix + "-allocation",
 		"tenantId": tenantID,
@@ -191,6 +192,12 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, vpcID, su
 	})
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create allocation: %v", allocResult)
 
+	// Extract the child IP block ID from the allocation response
+	constraints := allocResult["allocationConstraints"].([]interface{})
+	firstConstraint := constraints[0].(map[string]interface{})
+	childIPBlockID := firstConstraint["derivedResourceId"].(string)
+	_, _ = fmt.Fprintf(GinkgoWriter, "Child IP Block ID: %s\n", childIPBlockID)
+
 	// Create VPC
 	vpcResult, status := carbideAPIRequest("POST", apiBase+"/vpc", token, map[string]interface{}{
 		"name": prefix + "-vpc", "siteId": siteID,
@@ -198,9 +205,9 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, vpcID, su
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create VPC: %v", vpcResult)
 	vpcID = vpcResult["id"].(string)
 
-	// Create Subnet
+	// Create Subnet (uses child IP block, not the parent)
 	subnetResult, status := carbideAPIRequest("POST", apiBase+"/subnet", token, map[string]interface{}{
-		"name": prefix + "-subnet", "vpcId": vpcID, "ipv4BlockId": ipBlockID, "prefixLength": 24,
+		"name": prefix + "-subnet", "vpcId": vpcID, "ipv4BlockId": childIPBlockID, "prefixLength": 26,
 	})
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create subnet: %v", subnetResult)
 	subnetID = subnetResult["id"].(string)
