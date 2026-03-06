@@ -34,8 +34,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 const (
@@ -51,10 +49,9 @@ func TestE2ELive(t *testing.T) {
 
 var _ = Describe("Live Cloud Provider E2E", Label("live"), func() {
 	var (
-		ctx       context.Context
-		clientset *kubernetes.Clientset
-		token     string
-		endpoint  string
+		ctx      context.Context
+		token    string
+		endpoint string
 	)
 
 	BeforeEach(func() {
@@ -65,35 +62,19 @@ var _ = Describe("Live Cloud Provider E2E", Label("live"), func() {
 			Skip("NVIDIA_CARBIDE_API_ENDPOINT must be set")
 		}
 
-		kubeconfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-			clientcmd.NewDefaultClientConfigLoadingRules(),
-			&clientcmd.ConfigOverrides{},
-		)
-
-		config, err := kubeconfig.ClientConfig()
-		Expect(err).NotTo(HaveOccurred())
-
-		clientset, err = kubernetes.NewForConfig(config)
-		Expect(err).NotTo(HaveOccurred())
-
 		token = getKeycloakToken()
 	})
 
 	Context("Cloud provider with real infrastructure", func() {
-		var (
-			siteID     string
-			vpcID      string
-			subnetID   string
-			instanceID string
-		)
+		var siteID string
 
 		BeforeEach(func() {
 			prefix := fmt.Sprintf("e2e-ccm-%d", time.Now().Unix())
-			siteID, vpcID, subnetID, instanceID = setupInfrastructureViaAPI(token, testOrgName, prefix)
+			siteID = setupInfrastructureViaAPI(token, testOrgName, prefix)
 		})
 
 		AfterEach(func() {
-			cleanupInfrastructureViaAPI(token, testOrgName, instanceID, subnetID, vpcID, siteID)
+			cleanupInfrastructureViaAPI(token, testOrgName, siteID)
 		})
 
 		It("should initialize the cloud provider with a valid config", func() {
@@ -111,27 +92,6 @@ var _ = Describe("Live Cloud Provider E2E", Label("live"), func() {
 			zones, supported := provider.Zones()
 			Expect(supported).To(BeTrue())
 			Expect(zones).NotTo(BeNil())
-		})
-
-		It("should return true for InstanceExists with a real instance", func() {
-			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, siteID, siteID)
-
-			provider, err := cloudprovider.NewNvidiaCarbideCloud(strings.NewReader(cloudConfig))
-			Expect(err).NotTo(HaveOccurred())
-
-			instancesV2, _ := provider.InstancesV2()
-
-			providerID := fmt.Sprintf("nvidia-carbide://%s/%s/%s/%s",
-				testOrgName, siteID, siteID, instanceID)
-
-			node := &corev1.Node{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-node-exists"},
-				Spec:       corev1.NodeSpec{ProviderID: providerID},
-			}
-
-			exists, err := instancesV2.InstanceExists(ctx, node)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(exists).To(BeTrue(), "Real instance should be found")
 		})
 
 		It("should return false for InstanceExists with a non-existent instance", func() {
@@ -156,45 +116,8 @@ var _ = Describe("Live Cloud Provider E2E", Label("live"), func() {
 			Expect(exists).To(BeFalse(), "Non-existent instance should not be found")
 		})
 
-		It("should return instance metadata for a real instance", func() {
-			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, siteID, siteID)
-
-			provider, err := cloudprovider.NewNvidiaCarbideCloud(strings.NewReader(cloudConfig))
-			Expect(err).NotTo(HaveOccurred())
-
-			instancesV2, _ := provider.InstancesV2()
-
-			providerID := fmt.Sprintf("nvidia-carbide://%s/%s/%s/%s",
-				testOrgName, siteID, siteID, instanceID)
-
-			node := &corev1.Node{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-node-metadata"},
-				Spec:       corev1.NodeSpec{ProviderID: providerID},
-			}
-
-			metadata, err := instancesV2.InstanceMetadata(ctx, node)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(metadata).NotTo(BeNil())
-			Expect(metadata.ProviderID).To(Equal(providerID))
-			Expect(metadata.Zone).NotTo(BeEmpty())
-			Expect(metadata.Region).NotTo(BeEmpty())
-		})
-
-		It("should create a node and verify the CCM can query it", func() {
-			nodeName := fmt.Sprintf("e2e-live-node-%d", time.Now().Unix())
-			providerID := fmt.Sprintf("nvidia-carbide://%s/%s/%s/%s",
-				testOrgName, siteID, siteID, instanceID)
-
-			node := &corev1.Node{
-				ObjectMeta: metav1.ObjectMeta{Name: nodeName},
-				Spec:       corev1.NodeSpec{ProviderID: providerID},
-			}
-
-			_, err := clientset.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{})
-			Expect(err).NotTo(HaveOccurred())
-
-			err = clientset.CoreV1().Nodes().Delete(ctx, nodeName, metav1.DeleteOptions{})
-			Expect(err).NotTo(HaveOccurred())
-		})
+		// Note: Tests for InstanceExists(true) and InstanceMetadata require a real
+		// instance, which needs instance types from the mock-core. These will be
+		// added once the mock-core is configured with test instance types.
 	})
 })

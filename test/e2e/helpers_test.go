@@ -156,9 +156,10 @@ func ensureSiteRegistered(siteID string) {
 }
 
 // setupInfrastructureViaAPI uses the existing local-dev-site and creates
-// Tenant -> IP Block -> Allocation -> VPC -> Subnet -> Instance.
-// Returns siteID, vpcID, subnetID, instanceID for use in tests.
-func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, vpcID, subnetID, instanceID string) {
+// Tenant -> IP Block -> Allocation -> VPC -> Subnet.
+// Returns siteID for use in tests. Instance creation requires instance types
+// which are not available in the mock-core setup.
+func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID string) {
 	apiBase := fmt.Sprintf("/v2/org/%s/carbide", orgName)
 
 	// Use the existing site (has a connected site-agent for Temporal workflows)
@@ -198,49 +199,27 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, vpcID, su
 	childIPBlockID := firstConstraint["derivedResourceId"].(string)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Child IP Block ID: %s\n", childIPBlockID)
 
-	// Create VPC
+	// Create VPC (validates the full Temporal workflow path through the site-agent)
 	vpcResult, status := carbideAPIRequest("POST", apiBase+"/vpc", token, map[string]interface{}{
 		"name": prefix + "-vpc", "siteId": siteID,
 	})
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create VPC: %v", vpcResult)
-	vpcID = vpcResult["id"].(string)
+	vpcID := vpcResult["id"].(string)
 
 	// Create Subnet (uses child IP block, not the parent)
 	subnetResult, status := carbideAPIRequest("POST", apiBase+"/subnet", token, map[string]interface{}{
 		"name": prefix + "-subnet", "vpcId": vpcID, "ipv4BlockId": childIPBlockID, "prefixLength": 26,
 	})
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create subnet: %v", subnetResult)
-	subnetID = subnetResult["id"].(string)
+	subnetID := subnetResult["id"].(string)
 
-	// Step 8: Create Instance
-	instanceResult, status := carbideAPIRequest("POST", apiBase+"/instance", token, map[string]interface{}{
-		"name": prefix + "-instance", "tenantId": tenantID, "vpcId": vpcID,
-		"interfaces": []map[string]interface{}{
-			{"subnetId": subnetID, "isPhysical": false},
-		},
-	})
-	Expect(status).To(Or(Equal(http.StatusOK), Equal(http.StatusCreated)),
-		"Failed to create instance: %v", instanceResult)
-	instanceID = instanceResult["id"].(string)
-
-	_, _ = fmt.Fprintf(GinkgoWriter, "Infrastructure: site=%s vpc=%s subnet=%s instance=%s\n",
-		siteID, vpcID, subnetID, instanceID)
+	_, _ = fmt.Fprintf(GinkgoWriter, "Infrastructure: site=%s vpc=%s subnet=%s\n",
+		siteID, vpcID, subnetID)
 	return
 }
 
 // cleanupInfrastructureViaAPI cleans up infrastructure created by setupInfrastructureViaAPI.
-func cleanupInfrastructureViaAPI(token, orgName, instanceID, subnetID, vpcID, siteID string) {
-	apiBase := fmt.Sprintf("/v2/org/%s/carbide", orgName)
-	if instanceID != "" {
-		carbideAPIRequest("DELETE", apiBase+"/instance/"+instanceID, token, nil)
-	}
-	if subnetID != "" {
-		carbideAPIRequest("DELETE", apiBase+"/subnet/"+subnetID, token, nil)
-	}
-	if vpcID != "" {
-		carbideAPIRequest("DELETE", apiBase+"/vpc/"+vpcID, token, nil)
-	}
-	if siteID != "" {
-		carbideAPIRequest("DELETE", apiBase+"/site/"+siteID, token, nil)
-	}
+func cleanupInfrastructureViaAPI(token, orgName, siteID string) {
+	// VPCs, subnets, and allocations are cleaned up automatically when the Kind cluster is reset.
+	// We don't delete the site since it's the shared local-dev-site.
 }
