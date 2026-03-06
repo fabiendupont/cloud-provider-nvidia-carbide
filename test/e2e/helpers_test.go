@@ -180,7 +180,7 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, vpcID, su
 		"tenantId": tenantID,
 		"siteId":   siteID,
 		"allocationConstraints": []map[string]interface{}{
-			{"resourceType": "IPBlock", "resourceId": ipBlockID},
+			{"resourceType": "IPBlock", "resourceTypeId": ipBlockID, "constraintType": "OnDemand", "constraintValue": 1},
 		},
 	})
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create allocation: %v", allocResult)
