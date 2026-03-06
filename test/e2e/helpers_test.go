@@ -130,46 +130,78 @@ func registerSiteInDB(siteID string) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "Registered site %s in DB\n", siteID)
 }
 
-// setupInfrastructureViaAPI creates site, VPC, IP block, subnet, and an instance.
+// setupInfrastructureViaAPI creates the full Carbide infrastructure chain:
+// Infrastructure Provider -> Site (registered) -> Tenant -> IP Block -> Allocation -> VPC -> Subnet -> Instance.
 // Returns siteID, vpcID, subnetID, instanceID for use in tests.
 func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, vpcID, subnetID, instanceID string) {
 	apiBase := fmt.Sprintf("/v2/org/%s/carbide", orgName)
 
-	// Create site
+	// Step 1: Create Infrastructure Provider (idempotent — may already exist)
+	carbideAPIRequest("POST", apiBase+"/infrastructure-provider", token, map[string]interface{}{
+		"org": orgName,
+	})
+
+	// Step 2: Create Site
 	siteResult, status := carbideAPIRequest("POST", apiBase+"/site", token, map[string]interface{}{
 		"name": prefix + "-site", "displayName": prefix + " Site",
 	})
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create site: %v", siteResult)
 	siteID = siteResult["id"].(string)
 
-	// Register site (required before creating VPCs)
+	// Register site in DB (must be Registered before VPC creation)
 	registerSiteInDB(siteID)
 
-	// Create VPC
+	// Step 3: Create Tenant (idempotent — may already exist)
+	tenantResult, _ := carbideAPIRequest("POST", apiBase+"/tenant", token, map[string]interface{}{
+		"org": orgName,
+	})
+	// Get tenant ID — either from create response or from current tenant
+	var tenantID string
+	if id, ok := tenantResult["id"].(string); ok {
+		tenantID = id
+	} else {
+		currentTenant, tStatus := carbideAPIRequest("GET", apiBase+"/tenant/current", token, nil)
+		Expect(tStatus).To(Equal(http.StatusOK), "Failed to get current tenant: %v", currentTenant)
+		tenantID = currentTenant["id"].(string)
+	}
+	_, _ = fmt.Fprintf(GinkgoWriter, "Tenant ID: %s\n", tenantID)
+
+	// Step 4: Create IP Block
+	ipBlockResult, status := carbideAPIRequest("POST", apiBase+"/ipblock", token, map[string]interface{}{
+		"name": prefix + "-ipblock", "siteId": siteID,
+		"prefix": "10.0.0.0", "prefixLength": 16, "protocolVersion": "IPv4", "routingType": "Public",
+	})
+	Expect(status).To(Equal(http.StatusCreated), "Failed to create IP block: %v", ipBlockResult)
+	ipBlockID := ipBlockResult["id"].(string)
+
+	// Step 5: Create Allocation (links Tenant to Site with IP Block access)
+	allocResult, status := carbideAPIRequest("POST", apiBase+"/allocation", token, map[string]interface{}{
+		"name":     prefix + "-allocation",
+		"tenantId": tenantID,
+		"siteId":   siteID,
+		"allocationConstraints": []map[string]interface{}{
+			{"resourceType": "IPBlock", "resourceId": ipBlockID},
+		},
+	})
+	Expect(status).To(Equal(http.StatusCreated), "Failed to create allocation: %v", allocResult)
+
+	// Step 6: Create VPC
 	vpcResult, status := carbideAPIRequest("POST", apiBase+"/vpc", token, map[string]interface{}{
 		"name": prefix + "-vpc", "siteId": siteID,
 	})
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create VPC: %v", vpcResult)
 	vpcID = vpcResult["id"].(string)
 
-	// Create IP block
-	ipBlockResult, status := carbideAPIRequest("POST", apiBase+"/ipblock", token, map[string]interface{}{
-		"name": prefix + "-ipblock", "siteId": siteID,
-		"prefix": "10.0.0.0", "prefixLength": 16, "protocolVersion": "ipv4", "routingType": "datacenter_only",
-	})
-	Expect(status).To(Equal(http.StatusCreated), "Failed to create IP block: %v", ipBlockResult)
-	ipBlockID := ipBlockResult["id"].(string)
-
-	// Create subnet
+	// Step 7: Create Subnet
 	subnetResult, status := carbideAPIRequest("POST", apiBase+"/subnet", token, map[string]interface{}{
 		"name": prefix + "-subnet", "vpcId": vpcID, "ipv4BlockId": ipBlockID, "prefixLength": 24,
 	})
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create subnet: %v", subnetResult)
 	subnetID = subnetResult["id"].(string)
 
-	// Create instance
+	// Step 8: Create Instance
 	instanceResult, status := carbideAPIRequest("POST", apiBase+"/instance", token, map[string]interface{}{
-		"name": prefix + "-instance", "tenantId": siteID, "vpcId": vpcID,
+		"name": prefix + "-instance", "tenantId": tenantID, "vpcId": vpcID,
 		"interfaces": []map[string]interface{}{
 			{"subnetId": subnetID, "isPhysical": false},
 		},
