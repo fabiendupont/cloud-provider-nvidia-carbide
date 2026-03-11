@@ -91,7 +91,10 @@ type NvidiaCarbideCloud struct {
 	orgName             string
 	siteID              string
 	tenantID            string
-	siteCache           sync.Map // map[string]*bmm.Site
+	// siteCache maps siteID -> *siteInfo. Entries are never evicted because
+	// sites rarely change; restarting the CCM clears the cache.
+	siteCache           sync.Map
+	machineHealthCache  sync.Map // map[machineID]*machineHealthCacheEntry
 }
 
 func init() {
@@ -150,8 +153,10 @@ func (c *NvidiaCarbideCloud) Initialize(clientBuilder cloudprovider.ControllerCl
 	klog.Info("Initializing NVIDIA Carbide cloud provider")
 }
 
-// LoadBalancer returns a LoadBalancer interface
-// NVIDIA Carbide does not currently support load balancers
+// LoadBalancer returns a LoadBalancer interface.
+// NVIDIA Carbide does not implement cloud load balancers. Clusters should use
+// an external solution such as MetalLB, kube-vip, or a site-local hardware
+// load balancer.
 func (c *NvidiaCarbideCloud) LoadBalancer() (cloudprovider.LoadBalancer, bool) {
 	return nil, false
 }

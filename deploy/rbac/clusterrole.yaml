@@ -3,17 +3,7 @@ kind: ClusterRole
 metadata:
   name: system:cloud-controller-manager
 rules:
-  # Event permissions
-  - apiGroups:
-      - ""
-    resources:
-      - events
-    verbs:
-      - create
-      - patch
-      - update
-
-  # Node permissions
+  # Node lifecycle and labels
   - apiGroups:
       - ""
     resources:
@@ -22,104 +12,48 @@ rules:
       - get
       - list
       - watch
-      - update
       - patch
-      - delete
+      - update
 
+  # Node status (addresses and conditions)
   - apiGroups:
       - ""
     resources:
       - nodes/status
     verbs:
-      - get
-      - list
-      - watch
-      - update
       - patch
 
-  # Service permissions (for load balancer controller, if implemented)
+  # Recording events
   - apiGroups:
       - ""
     resources:
-      - services
-    verbs:
-      - list
-      - watch
-      - patch
-
-  - apiGroups:
-      - ""
-    resources:
-      - services/status
-    verbs:
-      - patch
-      - update
-
-  # ServiceAccount permissions
-  - apiGroups:
-      - ""
-    resources:
-      - serviceaccounts
+      - events
     verbs:
       - create
-      - get
-      - list
-      - watch
-
-  # Token permissions
-  - apiGroups:
-      - ""
-    resources:
-      - serviceaccounts/token
-    verbs:
-      - create
-
-  # PersistentVolume permissions
-  - apiGroups:
-      - ""
-    resources:
-      - persistentvolumes
-    verbs:
-      - get
-      - list
-      - watch
-      - update
       - patch
 
-  # ConfigMap permissions (for leader election)
-  - apiGroups:
-      - ""
-    resources:
-      - configmaps
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
-
-  # Lease permissions (for leader election)
+  # Leader election
   - apiGroups:
       - coordination.k8s.io
     resources:
       - leases
     verbs:
       - get
-      - list
-      - watch
       - create
       - update
-      - patch
-      - delete
 
-  # EndpointSlice permissions
+  # Service account token creation
   - apiGroups:
-      - discovery.k8s.io
+      - ""
     resources:
-      - endpointslices
+      - serviceaccounts
     verbs:
       - get
-      - list
-      - watch
+
+  # Cloud config
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get

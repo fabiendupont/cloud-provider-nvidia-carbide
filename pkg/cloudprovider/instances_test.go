@@ -331,6 +331,27 @@ func TestExtractNodeAddresses(t *testing.T) {
 			},
 		},
 		{
+			name: "skips non-physical interface with empty IPs",
+			interfaces: []bmm.Interface{
+				{
+					IsPhysical:  ptr(true),
+					IpAddresses: []string{"10.0.0.1"},
+				},
+				{
+					IsPhysical:  ptr(false),
+					IpAddresses: []string{},
+				},
+				{
+					IsPhysical:  ptr(false),
+					IpAddresses: []string{"192.168.2.20"},
+				},
+			},
+			wantIPs: []v1.NodeAddress{
+				{Type: v1.NodeInternalIP, Address: "192.168.2.20"},
+				{Type: v1.NodeHostName, Address: "test-node"},
+			},
+		},
+		{
 			name: "all physical interfaces skipped",
 			interfaces: []bmm.Interface{
 				{
@@ -368,13 +389,13 @@ func TestParseProviderID(t *testing.T) {
 	instanceID := uuid.New()
 	pid := providerid.NewProviderID("myorg", "mytenant", "mysite", instanceID)
 
-	parsed, err := parseProviderID(pid.String())
+	parsed, err := providerid.ParseProviderID(pid.String())
 	if err != nil {
-		t.Fatalf("parseProviderID() failed: %v", err)
+		t.Fatalf("ParseProviderID() failed: %v", err)
 	}
 
-	if parsed != instanceID {
-		t.Errorf("Expected instance ID %s, got %s", instanceID, parsed)
+	if parsed.InstanceID != instanceID {
+		t.Errorf("Expected instance ID %s, got %s", instanceID, parsed.InstanceID)
 	}
 }
 
@@ -392,9 +413,9 @@ func TestParseProviderID_Invalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := parseProviderID(tt.providerID)
+			_, err := providerid.ParseProviderID(tt.providerID)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("parseProviderID() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ParseProviderID() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

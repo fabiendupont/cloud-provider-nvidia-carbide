@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/google/uuid"
 	v1 "k8s.io/api/core/v1"
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/klog/v2"
@@ -39,19 +38,19 @@ func (c *NvidiaCarbideCloud) InstanceExists(ctx context.Context, node *v1.Node) 
 		return false, fmt.Errorf("node %s has no provider ID", node.Name)
 	}
 
-	instanceUUID, err := parseProviderID(providerID)
+	parsed, err := providerid.ParseProviderID(providerID)
 	if err != nil {
 		return false, fmt.Errorf("failed to parse provider ID: %w", err)
 	}
 
-	_, httpResp, err := c.nvidiaCarbideClient.GetInstance(ctx, c.orgName, instanceUUID.String())
+	_, httpResp, err := c.nvidiaCarbideClient.GetInstance(ctx, c.orgName, parsed.InstanceID.String())
 	if err != nil {
-		klog.Warningf("Instance %s not found: %v", instanceUUID, err)
+		klog.Warningf("Instance %s not found: %v", parsed.InstanceID, err)
 		return false, nil
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
-		klog.Warningf("Instance %s not found, status %d", instanceUUID, httpResp.StatusCode)
+		klog.Warningf("Instance %s not found, status %d", parsed.InstanceID, httpResp.StatusCode)
 		return false, nil
 	}
 
@@ -65,12 +64,12 @@ func (c *NvidiaCarbideCloud) InstanceShutdown(ctx context.Context, node *v1.Node
 		return false, fmt.Errorf("node %s has no provider ID", node.Name)
 	}
 
-	instanceUUID, err := parseProviderID(providerID)
+	parsed, err := providerid.ParseProviderID(providerID)
 	if err != nil {
 		return false, fmt.Errorf("failed to parse provider ID: %w", err)
 	}
 
-	instance, httpResp, err := c.nvidiaCarbideClient.GetInstance(ctx, c.orgName, instanceUUID.String())
+	instance, httpResp, err := c.nvidiaCarbideClient.GetInstance(ctx, c.orgName, parsed.InstanceID.String())
 	if err != nil {
 		return false, fmt.Errorf("failed to get instance: %w", err)
 	}
@@ -80,8 +79,13 @@ func (c *NvidiaCarbideCloud) InstanceShutdown(ctx context.Context, node *v1.Node
 	}
 
 	if instance.Status != nil {
-		switch string(*instance.Status) {
-		case "Terminating", "Terminated", "Error":
+		switch *instance.Status {
+		case bmm.INSTANCESTATUS_TERMINATING,
+			bmm.INSTANCESTATUS_ERROR:
+			return true, nil
+		// "Terminated" has no SDK constant (the OpenAPI spec does not define it),
+		// but the platform can return it after an instance finishes terminating.
+		case "Terminated":
 			return true, nil
 		default:
 			return false, nil
@@ -240,12 +244,15 @@ func (c *NvidiaCarbideCloud) extractNodeAddresses(instance *bmm.Instance, nodeNa
 					Address: ipAddr,
 				})
 				foundInternalIP = true
+				break
 			}
 			// TODO: Additional non-physical interfaces could be classified as
 			// NodeExternalIP if we can determine management vs. data interfaces
 			// from subnet metadata. For now, only the first IP is used.
 		}
 
+		// Only stop after we've found an IP; if this non-physical interface
+		// had no IPs, continue to the next one.
 		if foundInternalIP {
 			break
 		}
@@ -259,12 +266,3 @@ func (c *NvidiaCarbideCloud) extractNodeAddresses(instance *bmm.Instance, nodeNa
 	return addresses
 }
 
-// parseProviderID extracts the instance ID UUID from the provider ID format
-// Format: nvidia-carbide://org/tenant/site/instance-id
-func parseProviderID(providerIDStr string) (uuid.UUID, error) {
-	parsed, err := providerid.ParseProviderID(providerIDStr)
-	if err != nil {
-		return uuid.UUID{}, err
-	}
-	return parsed.InstanceID, nil
-}

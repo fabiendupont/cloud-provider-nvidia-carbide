@@ -31,6 +31,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/fabiendupont/cloud-provider-nvidia-carbide/pkg/cloudprovider"
+	"github.com/fabiendupont/cloud-provider-nvidia-carbide/pkg/providerid"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -66,15 +67,15 @@ var _ = Describe("Live Cloud Provider E2E", Label("live"), func() {
 	})
 
 	Context("Cloud provider with real infrastructure", Ordered, func() {
-		var siteID string
+		var siteID, tenantID string
 
 		BeforeAll(func() {
 			prefix := fmt.Sprintf("e2e-ccm-%d", time.Now().Unix())
-			siteID = setupInfrastructureViaAPI(token, testOrgName, prefix)
+			siteID, tenantID = setupInfrastructureViaAPI(token, testOrgName, prefix)
 		})
 
 		It("should initialize the cloud provider with a valid config", func() {
-			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, siteID, siteID)
+			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, siteID, tenantID)
 
 			provider, err := cloudprovider.NewNvidiaCarbideCloud(strings.NewReader(cloudConfig))
 			Expect(err).NotTo(HaveOccurred())
@@ -91,20 +92,19 @@ var _ = Describe("Live Cloud Provider E2E", Label("live"), func() {
 		})
 
 		It("should return false for InstanceExists with a non-existent instance", func() {
-			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, siteID, siteID)
+			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, siteID, tenantID)
 
 			provider, err := cloudprovider.NewNvidiaCarbideCloud(strings.NewReader(cloudConfig))
 			Expect(err).NotTo(HaveOccurred())
 
 			instancesV2, _ := provider.InstancesV2()
 
-			fakeInstanceID := uuid.New().String()
-			providerID := fmt.Sprintf("nvidia-carbide://%s/%s/%s/%s",
-				testOrgName, siteID, siteID, fakeInstanceID)
+			fakeInstanceID := uuid.New()
+			pid := providerid.NewProviderID(testOrgName, tenantID, siteID, fakeInstanceID)
 
 			node := &corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-node-not-exists"},
-				Spec:       corev1.NodeSpec{ProviderID: providerID},
+				Spec:       corev1.NodeSpec{ProviderID: pid.String()},
 			}
 
 			exists, err := instancesV2.InstanceExists(ctx, node)

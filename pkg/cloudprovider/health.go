@@ -20,10 +20,18 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	bmm "github.com/nvidia/bare-metal-manager-rest/sdk/standard"
 	"k8s.io/klog/v2"
 )
+
+const machineHealthCacheTTL = 2 * time.Minute
+
+type machineHealthCacheEntry struct {
+	labels    map[string]string
+	expiresAt time.Time
+}
 
 const (
 	// LabelHealthy indicates whether the machine has health alerts.
@@ -43,25 +51,37 @@ func (c *NvidiaCarbideCloud) machineHealthLabels(ctx context.Context, instance *
 		return nil
 	}
 
+	if cached, ok := c.machineHealthCache.Load(*machineID); ok {
+		entry := cached.(*machineHealthCacheEntry)
+		if time.Now().Before(entry.expiresAt) {
+			return entry.labels
+		}
+	}
+
 	machine, httpResp, err := c.nvidiaCarbideClient.GetMachine(ctx, c.orgName, *machineID)
 	if err != nil || httpResp.StatusCode != http.StatusOK || machine == nil {
 		klog.V(4).Infof("Could not fetch machine %s for health check: %v", *machineID, err)
 		return nil
 	}
 
+	var labels map[string]string
 	if machine.Health == nil {
-		return nil
-	}
-
-	alerts := machine.Health.Alerts
-	if len(alerts) == 0 {
-		return map[string]string{
+		labels = nil
+	} else if len(machine.Health.Alerts) == 0 {
+		labels = map[string]string{
 			LabelHealthy: "true",
+		}
+	} else {
+		labels = map[string]string{
+			LabelHealthy:          "false",
+			LabelHealthAlertCount: fmt.Sprintf("%d", len(machine.Health.Alerts)),
 		}
 	}
 
-	return map[string]string{
-		LabelHealthy:          "false",
-		LabelHealthAlertCount: fmt.Sprintf("%d", len(alerts)),
-	}
+	c.machineHealthCache.Store(*machineID, &machineHealthCacheEntry{
+		labels:    labels,
+		expiresAt: time.Now().Add(machineHealthCacheTTL),
+	})
+
+	return labels
 }

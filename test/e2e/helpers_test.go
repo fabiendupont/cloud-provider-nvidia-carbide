@@ -159,7 +159,7 @@ func ensureSiteRegistered(siteID string) {
 // Tenant -> IP Block -> Allocation -> VPC -> Subnet.
 // Returns siteID for use in tests. Instance creation requires instance types
 // which are not available in the mock-core setup.
-func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID string) {
+func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, tenantID string) {
 	apiBase := fmt.Sprintf("/v2/org/%s/carbide", orgName)
 
 	// Use the existing site (has a connected site-agent for Temporal workflows)
@@ -170,7 +170,7 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID string) {
 	carbideAPIRequest("POST", apiBase+"/tenant", token, map[string]interface{}{"org": orgName})
 	currentTenant, tStatus := carbideAPIRequest("GET", apiBase+"/tenant/current", token, nil)
 	Expect(tStatus).To(Equal(http.StatusOK), "Failed to get current tenant: %v", currentTenant)
-	tenantID := currentTenant["id"].(string)
+	tenantID = currentTenant["id"].(string)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Tenant ID: %s\n", tenantID)
 
 	// Create IP Block

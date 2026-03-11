@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a \
     cmd/nvidia-carbide-cloud-controller-manager/main.go
 
 # Use distroless as minimal base image
-FROM gcr.io/distroless/static:nonroot
+FROM gcr.io/distroless/static-debian12
 
 WORKDIR /
 

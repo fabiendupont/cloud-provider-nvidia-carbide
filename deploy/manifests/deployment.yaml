@@ -15,7 +15,8 @@ spec:
       labels:
         app: nvidia-carbide-cloud-controller-manager
     spec:
-      serviceAccountName: cloud-controller-manager
+      serviceAccountName: nvidia-carbide-cloud-controller-manager
+      hostNetwork: true
       containers:
         - name: cloud-controller-manager
           image: ghcr.io/fabiendupont/cloud-provider-nvidia-carbide:latest
@@ -23,14 +24,14 @@ spec:
           command:
             - /nvidia-carbide-cloud-controller-manager
             - --cloud-provider=nvidia-carbide
-            - --cloud-config=/etc/nvidia-carbide/cloud-config
+            - --cloud-config=/etc/kubernetes/cloud-config
             - --use-service-account-credentials=true
             - --leader-elect=true
             - --leader-elect-resource-name=nvidia-carbide-cloud-controller-manager
             - --v=2
           volumeMounts:
             - name: cloud-config
-              mountPath: /etc/nvidia-carbide
+              mountPath: /etc/kubernetes
               readOnly: true
           resources:
             requests:
@@ -55,14 +56,12 @@ spec:
               - key: cloud-config
                 path: cloud-config
       tolerations:
-        # Allow running on control plane nodes
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
           effect: NoSchedule
         - key: node-role.kubernetes.io/master
           operator: Exists
           effect: NoSchedule
-        # Allow running on uninitialized nodes
         - key: node.cloudprovider.kubernetes.io/uninitialized
           operator: Exists
           effect: NoSchedule
