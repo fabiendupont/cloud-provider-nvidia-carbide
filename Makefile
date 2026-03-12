@@ -61,9 +61,15 @@ run: fmt vet ## Run cloud controller manager from your host (requires kubeconfig
 		--use-service-account-credentials=false \
 		--kubeconfig=${KUBECONFIG}
 
+PLATFORMS ?= linux/amd64,linux/arm64
+
 .PHONY: docker-build
-docker-build: ## Build docker image.
+docker-build: ## Build docker image for the current platform.
 	docker build -t ${IMG} .
+
+.PHONY: docker-buildx
+docker-buildx: ## Build and push multi-arch docker image.
+	docker buildx build --platform $(PLATFORMS) -t ${IMG} --push .
 
 .PHONY: docker-push
 docker-push: ## Push docker image.
