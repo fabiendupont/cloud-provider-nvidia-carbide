@@ -257,8 +257,8 @@ type siteInfo struct {
 	state   string
 	city    string
 	// Site capabilities (nil pointer means unknown/absent)
-	nvLinkPartition        *bool
-	networkSecurityGroup   *bool
+	nvLinkPartition         *bool
+	networkSecurityGroup    *bool
 	rackLevelAdministration *bool
 }
 
