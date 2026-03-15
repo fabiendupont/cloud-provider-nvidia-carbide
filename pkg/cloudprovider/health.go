@@ -114,27 +114,23 @@ const (
 )
 
 // siteCapabilityLabels returns labels describing site capabilities.
-// These are cached alongside site zone/region data.
+// Data is served from the site cache populated by getCachedSite().
 func (c *NvidiaCarbideCloud) siteCapabilityLabels(ctx context.Context, siteID string) map[string]string {
-	site, httpResp, err := c.nvidiaCarbideClient.GetSite(ctx, c.orgName, siteID)
-	if err != nil || httpResp.StatusCode != http.StatusOK || site == nil {
+	info, err := c.getCachedSite(ctx, siteID)
+	if err != nil || info == nil {
 		klog.V(4).Infof("Could not fetch site %s for capabilities: %v", siteID, err)
 		return nil
 	}
 
-	if site.Capabilities == nil {
-		return nil
-	}
-
 	labels := map[string]string{}
-	if site.Capabilities.NvLinkPartition != nil {
-		labels[LabelSiteNVLink] = fmt.Sprintf("%t", *site.Capabilities.NvLinkPartition)
+	if info.nvLinkPartition != nil {
+		labels[LabelSiteNVLink] = fmt.Sprintf("%t", *info.nvLinkPartition)
 	}
-	if site.Capabilities.NetworkSecurityGroup != nil {
-		labels[LabelSiteNSG] = fmt.Sprintf("%t", *site.Capabilities.NetworkSecurityGroup)
+	if info.networkSecurityGroup != nil {
+		labels[LabelSiteNSG] = fmt.Sprintf("%t", *info.networkSecurityGroup)
 	}
-	if site.Capabilities.RackLevelAdministration != nil {
-		labels[LabelSiteRLA] = fmt.Sprintf("%t", *site.Capabilities.RackLevelAdministration)
+	if info.rackLevelAdministration != nil {
+		labels[LabelSiteRLA] = fmt.Sprintf("%t", *info.rackLevelAdministration)
 	}
 
 	return labels

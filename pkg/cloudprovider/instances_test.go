@@ -295,7 +295,7 @@ func TestExtractNodeAddresses(t *testing.T) {
 		wantIPs    []v1.NodeAddress
 	}{
 		{
-			name: "uses first non-physical interface IP",
+			name: "uses all IPs from non-physical interfaces",
 			interfaces: []bmm.Interface{
 				{
 					IsPhysical:  ptr(true),
@@ -308,6 +308,7 @@ func TestExtractNodeAddresses(t *testing.T) {
 			},
 			wantIPs: []v1.NodeAddress{
 				{Type: v1.NodeInternalIP, Address: "192.168.1.10"},
+				{Type: v1.NodeInternalIP, Address: "192.168.1.11"},
 				{Type: v1.NodeHostName, Address: "test-node"},
 			},
 		},
@@ -347,6 +348,28 @@ func TestExtractNodeAddresses(t *testing.T) {
 				},
 			},
 			wantIPs: []v1.NodeAddress{
+				{Type: v1.NodeInternalIP, Address: "192.168.2.20"},
+				{Type: v1.NodeHostName, Address: "test-node"},
+			},
+		},
+		{
+			name: "multiple non-physical interfaces all contribute IPs",
+			interfaces: []bmm.Interface{
+				{
+					IsPhysical:  ptr(false),
+					IpAddresses: []string{"192.168.1.10"},
+				},
+				{
+					IsPhysical:  ptr(true),
+					IpAddresses: []string{"10.0.0.1"},
+				},
+				{
+					IsPhysical:  ptr(false),
+					IpAddresses: []string{"192.168.2.20"},
+				},
+			},
+			wantIPs: []v1.NodeAddress{
+				{Type: v1.NodeInternalIP, Address: "192.168.1.10"},
 				{Type: v1.NodeInternalIP, Address: "192.168.2.20"},
 				{Type: v1.NodeHostName, Address: "test-node"},
 			},

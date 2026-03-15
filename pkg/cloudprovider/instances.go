@@ -236,25 +236,35 @@ func (c *NvidiaCarbideCloud) getCachedSite(ctx context.Context, siteID string) (
 		info.state = strings.ToLower(loc.GetState())
 		info.city = strings.ToLower(loc.GetCity())
 	}
+	if site.Capabilities != nil {
+		info.nvLinkPartition = site.Capabilities.NvLinkPartition
+		info.networkSecurityGroup = site.Capabilities.NetworkSecurityGroup
+		info.rackLevelAdministration = site.Capabilities.RackLevelAdministration
+	}
 
 	c.siteCache.Store(siteID, info)
 	return info, nil
 }
 
-// siteInfo holds cached site location data.
+// siteInfo holds cached site location and capability data.
 type siteInfo struct {
 	name    string
 	country string
 	state   string
 	city    string
+	// Site capabilities (nil pointer means unknown/absent)
+	nvLinkPartition        *bool
+	networkSecurityGroup   *bool
+	rackLevelAdministration *bool
 }
 
 // extractNodeAddresses classifies instance interfaces into Kubernetes node addresses.
-// The first non-physical interface's first IP is used as NodeInternalIP.
+// All IPs from non-physical (virtual function) interfaces are reported as NodeInternalIP.
 // Physical interfaces (CIN/InfiniBand) are skipped as they are not Kubernetes-routable.
+// InfiniBand and NVLink interfaces are separate collections on Instance and are not
+// included here — they carry partition GUIDs, not routable IP addresses.
 func (c *NvidiaCarbideCloud) extractNodeAddresses(instance *bmm.Instance, nodeName string) []v1.NodeAddress {
 	var addresses []v1.NodeAddress
-	foundInternalIP := false
 
 	for _, iface := range instance.Interfaces {
 		// Skip physical interfaces (CIN/InfiniBand) — not Kubernetes-routable
@@ -263,24 +273,11 @@ func (c *NvidiaCarbideCloud) extractNodeAddresses(instance *bmm.Instance, nodeNa
 		}
 
 		for _, ipAddr := range iface.IpAddresses {
-			if !foundInternalIP {
-				addresses = append(addresses, v1.NodeAddress{
-					Type:    v1.NodeInternalIP,
-					Address: ipAddr,
-				})
-				klog.V(2).InfoS("Resolved node internal IP", "node", nodeName, "address", ipAddr)
-				foundInternalIP = true
-				break
-			}
-			// TODO: Additional non-physical interfaces could be classified as
-			// NodeExternalIP if we can determine management vs. data interfaces
-			// from subnet metadata. For now, only the first IP is used.
-		}
-
-		// Only stop after we've found an IP; if this non-physical interface
-		// had no IPs, continue to the next one.
-		if foundInternalIP {
-			break
+			addresses = append(addresses, v1.NodeAddress{
+				Type:    v1.NodeInternalIP,
+				Address: ipAddr,
+			})
+			klog.V(2).InfoS("Resolved node internal IP", "node", nodeName, "address", ipAddr)
 		}
 	}
 
