@@ -85,12 +85,16 @@ func (c *NvidiaCarbideCloud) InstanceShutdown(ctx context.Context, node *v1.Node
 		switch *instance.Status {
 		case bmm.INSTANCESTATUS_TERMINATING,
 			bmm.INSTANCESTATUS_ERROR:
-			klog.V(2).InfoS("Instance is shut down", "node", node.Name, "instanceID", parsed.InstanceID, "status", *instance.Status)
+			klog.V(2).InfoS("Instance is shut down",
+				"node", node.Name, "instanceID", parsed.InstanceID,
+				"status", *instance.Status)
 			return true, nil
 		// "Terminated" has no SDK constant (the OpenAPI spec does not define it),
 		// but the platform can return it after an instance finishes terminating.
 		case "Terminated":
-			klog.V(2).InfoS("Instance is shut down", "node", node.Name, "instanceID", parsed.InstanceID, "status", "Terminated")
+			klog.V(2).InfoS("Instance is shut down",
+				"node", node.Name, "instanceID", parsed.InstanceID,
+				"status", "Terminated")
 			return true, nil
 		default:
 			return false, nil

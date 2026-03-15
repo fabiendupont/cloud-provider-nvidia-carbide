@@ -91,7 +91,9 @@ func (c *NvidiaCarbideCloud) machineHealthLabels(ctx context.Context, instance *
 		currentHealthy = labels[LabelHealthy]
 	}
 	if previousHealthy != "" && currentHealthy != "" && previousHealthy != currentHealthy {
-		klog.V(2).InfoS("Machine health status changed", "machineID", *machineID, "previous", previousHealthy, "current", currentHealthy)
+		klog.V(2).InfoS("Machine health status changed",
+			"machineID", *machineID,
+			"previous", previousHealthy, "current", currentHealthy)
 	}
 
 	c.machineHealthCache.Store(*machineID, &machineHealthCacheEntry{
