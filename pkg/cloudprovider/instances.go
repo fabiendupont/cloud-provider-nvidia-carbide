@@ -135,6 +135,26 @@ func (c *NvidiaCarbideCloud) InstanceMetadata(
 
 	additionalLabels := c.machineHealthLabels(ctx, instance)
 
+	// Merge site capability labels
+	siteLabels := c.siteCapabilityLabels(ctx, siteID)
+	for k, v := range siteLabels {
+		if additionalLabels == nil {
+			additionalLabels = map[string]string{}
+		}
+		additionalLabels[k] = v
+	}
+
+	// Add serial console URL as a label if short enough
+	if instance.SerialConsoleUrl.Get() != nil && *instance.SerialConsoleUrl.Get() != "" {
+		url := *instance.SerialConsoleUrl.Get()
+		if len(url) <= 63 {
+			if additionalLabels == nil {
+				additionalLabels = map[string]string{}
+			}
+			additionalLabels["nvidia-carbide.io/serial-console"] = url
+		}
+	}
+
 	metadata := &cloudprovider.InstanceMetadata{
 		ProviderID:       providerID,
 		InstanceType:     instanceType,

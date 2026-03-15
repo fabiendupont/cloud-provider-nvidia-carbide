@@ -101,3 +101,41 @@ func (c *NvidiaCarbideCloud) machineHealthLabels(ctx context.Context, instance *
 
 	return labels
 }
+
+const (
+	// LabelSiteNVLink indicates whether the site supports NVLink partitioning.
+	LabelSiteNVLink = "nvidia-carbide.io/site-nvlink"
+
+	// LabelSiteNSG indicates whether the site supports network security groups.
+	LabelSiteNSG = "nvidia-carbide.io/site-nsg"
+
+	// LabelSiteRLA indicates whether the site supports rack-level administration.
+	LabelSiteRLA = "nvidia-carbide.io/site-rla"
+)
+
+// siteCapabilityLabels returns labels describing site capabilities.
+// These are cached alongside site zone/region data.
+func (c *NvidiaCarbideCloud) siteCapabilityLabels(ctx context.Context, siteID string) map[string]string {
+	site, httpResp, err := c.nvidiaCarbideClient.GetSite(ctx, c.orgName, siteID)
+	if err != nil || httpResp.StatusCode != http.StatusOK || site == nil {
+		klog.V(4).Infof("Could not fetch site %s for capabilities: %v", siteID, err)
+		return nil
+	}
+
+	if site.Capabilities == nil {
+		return nil
+	}
+
+	labels := map[string]string{}
+	if site.Capabilities.NvLinkPartition != nil {
+		labels[LabelSiteNVLink] = fmt.Sprintf("%t", *site.Capabilities.NvLinkPartition)
+	}
+	if site.Capabilities.NetworkSecurityGroup != nil {
+		labels[LabelSiteNSG] = fmt.Sprintf("%t", *site.Capabilities.NetworkSecurityGroup)
+	}
+	if site.Capabilities.RackLevelAdministration != nil {
+		labels[LabelSiteRLA] = fmt.Sprintf("%t", *site.Capabilities.RackLevelAdministration)
+	}
+
+	return labels
+}
