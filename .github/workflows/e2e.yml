@@ -29,8 +29,8 @@ jobs:
 
       - name: Checkout Carbide source repos
         run: |
-          git clone --depth 1 https://github.com/NVIDIA/bare-metal-manager-core.git $CORE_REPO_PATH
-          git clone --depth 1 https://github.com/NVIDIA/bare-metal-manager-rest.git $REST_REPO_PATH
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 https://github.com/NVIDIA/bare-metal-manager-core.git $CORE_REPO_PATH
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 https://github.com/NVIDIA/bare-metal-manager-rest.git $REST_REPO_PATH
 
       - name: Setup Go
         uses: actions/setup-go@v5
