@@ -24,7 +24,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -39,19 +38,22 @@ import (
 
 const (
 	testOrgName  = "test-org"
-	pollInterval = 10 * time.Second
+	testTenantID = "e2e-tenant"
+	testSiteID   = "e2e-site"
+	// Keycloak is disabled in the operator deployment, so any token works.
+	testToken = "e2e-dummy-token"
 )
 
 func TestE2ELive(t *testing.T) {
 	RegisterFailHandler(Fail)
-	_, _ = fmt.Fprintf(GinkgoWriter, "Starting cloud-provider-nvidia-carbide live e2e test suite\n")
+	_, _ = fmt.Fprintf(GinkgoWriter,
+		"Starting cloud-provider-nvidia-carbide live e2e test suite\n")
 	RunSpecs(t, "Live E2E Suite")
 }
 
 var _ = Describe("Live Cloud Provider E2E", Label("live"), func() {
 	var (
 		ctx      context.Context
-		token    string
 		endpoint string
 	)
 
@@ -62,22 +64,15 @@ var _ = Describe("Live Cloud Provider E2E", Label("live"), func() {
 		if endpoint == "" {
 			Skip("NVIDIA_CARBIDE_API_ENDPOINT must be set")
 		}
-
-		token = getKeycloakToken()
 	})
 
-	Context("Cloud provider with real infrastructure", Ordered, func() {
-		var siteID, tenantID string
-
-		BeforeAll(func() {
-			prefix := fmt.Sprintf("e2e-ccm-%d", time.Now().Unix())
-			siteID, tenantID = setupInfrastructureViaAPI(token, testOrgName, prefix)
-		})
-
+	Context("Cloud provider with live API", func() {
 		It("should initialize the cloud provider with a valid config", func() {
-			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, siteID, tenantID)
+			cloudConfig := createCloudConfigSecret(
+				endpoint, testOrgName, testToken, testSiteID, testTenantID)
 
-			provider, err := cloudprovider.NewNvidiaCarbideCloud(strings.NewReader(cloudConfig))
+			provider, err := cloudprovider.NewNvidiaCarbideCloud(
+				strings.NewReader(cloudConfig))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(provider).NotTo(BeNil())
 			Expect(provider.ProviderName()).To(Equal("nvidia-carbide"))
@@ -91,29 +86,30 @@ var _ = Describe("Live Cloud Provider E2E", Label("live"), func() {
 			Expect(zones).NotTo(BeNil())
 		})
 
-		It("should return false for InstanceExists with a non-existent instance", func() {
-			cloudConfig := createCloudConfigSecret(endpoint, testOrgName, token, siteID, tenantID)
+		It("should return false for InstanceExists with a non-existent instance",
+			func() {
+				cloudConfig := createCloudConfigSecret(
+					endpoint, testOrgName, testToken, testSiteID, testTenantID)
 
-			provider, err := cloudprovider.NewNvidiaCarbideCloud(strings.NewReader(cloudConfig))
-			Expect(err).NotTo(HaveOccurred())
+				provider, err := cloudprovider.NewNvidiaCarbideCloud(
+					strings.NewReader(cloudConfig))
+				Expect(err).NotTo(HaveOccurred())
 
-			instancesV2, _ := provider.InstancesV2()
+				instancesV2, _ := provider.InstancesV2()
 
-			fakeInstanceID := uuid.New()
-			pid := providerid.NewProviderID(testOrgName, tenantID, siteID, fakeInstanceID)
+				fakeInstanceID := uuid.New()
+				pid := providerid.NewProviderID(
+					testOrgName, testTenantID, testSiteID, fakeInstanceID)
 
-			node := &corev1.Node{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-node-not-exists"},
-				Spec:       corev1.NodeSpec{ProviderID: pid.String()},
-			}
+				node := &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{Name: "test-node-not-exists"},
+					Spec:       corev1.NodeSpec{ProviderID: pid.String()},
+				}
 
-			exists, err := instancesV2.InstanceExists(ctx, node)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(exists).To(BeFalse(), "Non-existent instance should not be found")
-		})
-
-		// Note: Tests for InstanceExists(true) and InstanceMetadata require a real
-		// instance, which needs instance types from the mock-core. These will be
-		// added once the mock-core is configured with test instance types.
+				exists, err := instancesV2.InstanceExists(ctx, node)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(exists).To(BeFalse(),
+					"Non-existent instance should not be found")
+			})
 	})
 })

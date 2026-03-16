@@ -9,22 +9,28 @@ jobs:
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       KUBECONFIG: /tmp/carbide-e2e-kubeconfig
-      NVIDIA_CARBIDE_API_ENDPOINT: http://localhost:8388
-      NVIDIA_CARBIDE_KEYCLOAK_URL: http://localhost:8082
-      NVIDIA_CARBIDE_API_ENDPOINT_INTERNAL: http://carbide-rest-api.carbide-rest.svc:8388
-      IMG: localhost/cloud-provider-nvidia-carbide:e2e
+      NVIDIA_CARBIDE_API_ENDPOINT: http://localhost:8080
+      KIND_CLUSTER: carbide-ccm-e2e
+      OPERATOR_IMG: localhost/nvidia-carbide-operator:e2e
+      CORE_REPO_PATH: /tmp/carbide/bare-metal-manager-core
+      REST_REPO_PATH: /tmp/carbide/bare-metal-manager-rest
     steps:
       - name: Checkout provider
         uses: actions/checkout@v4
 
-      - name: Checkout NVIDIA bare-metal-manager-rest
+      - name: Checkout operator
         uses: actions/checkout@v4
         with:
-          repository: NVIDIA/bare-metal-manager-rest
-          path: bare-metal-manager-rest
+          repository: fabiendupont/bare-metal-manager-operator
+          path: bare-metal-manager-operator
+
+      - name: Checkout Carbide source repos
+        run: |
+          git clone --depth 1 https://github.com/NVIDIA/bare-metal-manager-core.git $CORE_REPO_PATH
+          git clone --depth 1 https://github.com/NVIDIA/bare-metal-manager-rest.git $REST_REPO_PATH
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -32,34 +38,261 @@ jobs:
           go-version-file: go.mod
 
       - name: Increase inotify limits
-        run: sudo sysctl -w fs.inotify.max_user_instances=512
-
-      - name: Deploy Carbide REST stack
-        run: make kind-reset
-        working-directory: bare-metal-manager-rest
-        timeout-minutes: 20
-        env:
-          KUBECONFIG: ""
-
-      - name: Verify Carbide API health
         run: |
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:8388/healthz; then
-              echo "API is healthy"
-              exit 0
-            fi
-            sleep 5
+          sudo sysctl -w fs.inotify.max_user_instances=512
+          sudo sysctl -w fs.inotify.max_user_watches=1048576
+
+      - name: Install Kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-$(go env GOARCH)
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+
+      - name: Build operator and service images
+        working-directory: bare-metal-manager-operator
+        run: |
+          make docker-build IMG=$OPERATOR_IMG DOCKERFILE=Dockerfile.ci
+          make docker-build-e2e-services E2E_REGISTRY=localhost E2E_IMAGE_TAG=e2e
+
+      - name: Create Kind cluster and load images
+        run: |
+          kind create cluster --name $KIND_CLUSTER
+          kind load docker-image $OPERATOR_IMG --name $KIND_CLUSTER
+          for img in \
+            localhost/carbide-rest-api:e2e \
+            localhost/carbide-rest-workflow:e2e \
+            localhost/carbide-rest-site-manager:e2e \
+            localhost/carbide-rest-db:e2e \
+            docker.io/library/postgres:16-alpine; do
+            docker pull "$img" 2>/dev/null || true
+            kind load docker-image "$img" --name $KIND_CLUSTER
           done
-          echo "API health check failed"
-          exit 1
 
-      - name: Export kubeconfig
-        run: kind get kubeconfig --name carbide-rest-local > $KUBECONFIG
-
-      - name: Build and load provider image
+      - name: Install cert-manager
         run: |
-          make docker-build IMG=$IMG
-          kind load docker-image $IMG --name carbide-rest-local
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.2/cert-manager.yaml
+          kubectl wait --for=condition=Available deployment/cert-manager-webhook -n cert-manager --timeout=120s
+          # Verify cert-manager can issue certificates
+          for i in $(seq 1 12); do
+            if kubectl apply -f - <<'EOF'
+          apiVersion: cert-manager.io/v1
+          kind: Issuer
+          metadata:
+            name: e2e-test-issuer
+            namespace: default
+          spec:
+            selfSigned: {}
+          EOF
+            then break; fi
+            echo "cert-manager not ready yet (attempt $i/12), waiting 10s..."
+            sleep 10
+          done
+          kubectl delete issuer e2e-test-issuer -n default --ignore-not-found
+
+      - name: Install PGO CRDs
+        run: |
+          kubectl apply --server-side -k \
+            https://github.com/CrunchyData/postgres-operator//config/crd
+
+      - name: Deploy PostgreSQL
+        run: |
+          kubectl create ns postgres-e2e
+          kubectl apply -f - <<'EOF'
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: postgres-credentials
+            namespace: postgres-e2e
+          stringData:
+            POSTGRES_USER: carbide
+            POSTGRES_PASSWORD: e2e-test-password
+            POSTGRES_DB: carbide
+          ---
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: postgres
+            namespace: postgres-e2e
+          spec:
+            serviceName: postgres
+            replicas: 1
+            selector:
+              matchLabels:
+                app: postgres
+            template:
+              metadata:
+                labels:
+                  app: postgres
+              spec:
+                containers:
+                - name: postgres
+                  image: docker.io/library/postgres:16-alpine
+                  ports:
+                  - containerPort: 5432
+                  envFrom:
+                  - secretRef:
+                      name: postgres-credentials
+                  readinessProbe:
+                    exec:
+                      command: ["pg_isready", "-U", "carbide"]
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: postgres
+            namespace: postgres-e2e
+          spec:
+            selector:
+              app: postgres
+            ports:
+            - port: 5432
+              targetPort: 5432
+          EOF
+          kubectl wait --for=condition=Ready pod/postgres-0 -n postgres-e2e --timeout=120s
+
+      - name: Create PostgreSQL databases
+        run: |
+          for db in forge rla psm temporal temporal_visibility; do
+            kubectl exec postgres-0 -n postgres-e2e -- \
+              psql -U carbide -c "CREATE DATABASE $db;" 2>/dev/null || true
+            kubectl exec postgres-0 -n postgres-e2e -- \
+              psql -U carbide -c "CREATE USER $db WITH PASSWORD 'e2e-test-password';" 2>/dev/null || true
+            kubectl exec postgres-0 -n postgres-e2e -- \
+              psql -U carbide -c "GRANT ALL PRIVILEGES ON DATABASE $db TO $db;" 2>/dev/null || true
+          done
+
+      - name: Deploy operator
+        working-directory: bare-metal-manager-operator
+        run: |
+          make install
+          make deploy IMG=$OPERATOR_IMG
+
+          # Create self-signed ClusterIssuer
+          kubectl apply -f - <<'EOF'
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: carbide-e2e-selfsigned
+          spec:
+            selfSigned: {}
+          EOF
+
+          # Wait for operator to be ready
+          kubectl wait --for=condition=Available deployment/controller-manager \
+            -n nvidia-carbide --timeout=120s
+
+      - name: Create CarbideDeployment
+        run: |
+          # Create namespace and PostgreSQL user secrets
+          kubectl create ns nvidia-carbide-e2e || true
+          for svc in carbide forge rla psm; do
+            kubectl create secret generic "pg-$svc" \
+              -n nvidia-carbide-e2e \
+              --from-literal=user=$svc \
+              --from-literal=password=e2e-test-password \
+              2>/dev/null || true
+          done
+
+          kubectl apply -f - <<'EOF'
+          apiVersion: carbide.nvidia.com/v1alpha1
+          kind: CarbideDeployment
+          metadata:
+            name: e2e-ccm
+            namespace: nvidia-carbide-e2e
+          spec:
+            profile: management
+            version: "latest"
+            tls:
+              mode: certManager
+              certManager:
+                issuerRef:
+                  name: carbide-e2e-selfsigned
+                  kind: ClusterIssuer
+            infrastructure:
+              namespace: nvidia-carbide-e2e
+              postgresql:
+                mode: external
+                connection:
+                  host: postgres.postgres-e2e.svc
+                  port: 5432
+                  sslMode: disable
+                  userSecrets:
+                    carbide:
+                      name: pg-carbide
+                    forge:
+                      name: pg-forge
+                    rla:
+                      name: pg-rla
+                    psm:
+                      name: pg-psm
+            core:
+              namespace: nvidia-carbide-e2e
+              api:
+                port: 1079
+              dhcp:
+                enabled: false
+              dns:
+                enabled: false
+              pxe:
+                enabled: false
+              vault:
+                mode: managed
+              rla:
+                enabled: false
+              psm:
+                enabled: false
+            rest:
+              temporal:
+                mode: managed
+              keycloak:
+                mode: disabled
+              restAPI:
+                port: 8080
+          EOF
+
+      - name: Wait for REST API
+        run: |
+          echo "Waiting for REST API deployment..."
+          for i in $(seq 1 60); do
+            if kubectl get deployment carbide-rest-api -n nvidia-carbide-e2e &>/dev/null; then
+              echo "REST API deployment found"
+              break
+            fi
+            echo "Waiting for operator to create REST API deployment ($i/60)..."
+            sleep 10
+          done
+
+          kubectl wait --for=condition=Available deployment/carbide-rest-api \
+            -n nvidia-carbide-e2e --timeout=300s
+
+          echo "REST API is ready"
+
+      - name: Export kubeconfig and port-forward
+        run: |
+          kind get kubeconfig --name $KIND_CLUSTER > $KUBECONFIG
+
+          # Start port-forward in background
+          kubectl port-forward svc/carbide-rest-api 8080:8080 \
+            -n nvidia-carbide-e2e &
+          PF_PID=$!
+          echo "PF_PID=$PF_PID" >> $GITHUB_ENV
+
+          # Wait for port-forward to be ready
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/healthz 2>/dev/null; then
+              echo "Port-forward ready"
+              break
+            fi
+            sleep 2
+          done
 
       - name: Run e2e tests
         run: make test-e2e-live
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kill $PF_PID 2>/dev/null || true
+          kind delete cluster --name $KIND_CLUSTER 2>/dev/null || true

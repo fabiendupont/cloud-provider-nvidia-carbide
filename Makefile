@@ -41,9 +41,11 @@ vet: ## Run go vet against code.
 test: ## Run tests.
 	go test ./... -coverprofile cover.out
 
+KIND_CLUSTER ?= carbide-ccm-e2e
+
 .PHONY: test-e2e-live
 test-e2e-live: ## Run e2e tests against live Carbide API.
-	kind get kubeconfig --name carbide-rest-local > /tmp/carbide-e2e-kubeconfig
+	kind get kubeconfig --name $(KIND_CLUSTER) > /tmp/carbide-e2e-kubeconfig
 	KUBECONFIG=/tmp/carbide-e2e-kubeconfig \
 		go test -tags=e2e ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="live"
 
